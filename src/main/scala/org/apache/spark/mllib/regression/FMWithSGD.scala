@@ -33,14 +33,6 @@ object FMWithSGD {
       .setInitStd(initStd)
       .run(input)
   }
-
-  def train(input: RDD[LabeledPoint],
-            task: Int,
-            numIterations: Int): FMModel = {
-    new FMWithSGD(task, 1.0, numIterations, (true, true, 8), (0, 1e-3, 1e-4), 1e-5)
-      .setInitStd(0.01)
-      .run(input)
-  }
 }
 
 
