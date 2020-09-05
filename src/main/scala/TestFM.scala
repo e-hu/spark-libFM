@@ -17,7 +17,7 @@ object TestFM extends App {
     val sc = new SparkContext(new SparkConf().setAppName("TESTFM"))
 
     // 读取训练数据
-    val trainData = MLUtils.loadLibSVMFile(sc, "hdfs://ns1/whale-tmp/url_combined").cache()
+    val trainData = MLUtils.loadLibSVMFile(sc, "/Users/test/RecommendSytem/dataset/train.csv").cache()
 
     // 模型参数
     val task              = args(1).toInt     // 任务数量
