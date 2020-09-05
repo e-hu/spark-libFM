@@ -147,60 +147,44 @@ class FMWithSGD(private var task: Int,
     this
   }
 
-
-  /**
-    * Encode the FMModel to a dense vector, with its first numFeatures * numFactors elements representing the
-    * factorization matrix v, sequential numFeaturs elements representing the one-way interactions weights w if k1 is
-    * set to true, and the last element representing the intercept w0 if k0 is set to true.
-    * The factorization matrix v is initialized by Gaussinan(0, initStd).
-    * v : numFeatures * numFactors + w : [numFeatures] + w0 : [1]
-    */
+class FMWithSGD(private var task: Int,
+                private var stepSize: Double,
+                private var numIterations: Int,
+                private var dim: (Boolean, Boolean, Int),
+                private var regParam: (Double, Double, Double),
+                private var miniBatchFraction: Double) extends Serializable with Logging {
+  // 初始化参数矩阵
   private def generateInitWeights(): Vector = {
     (k0, k1) match {
       case (true, true) =>
         Vectors.dense(Array.fill(numFeatures * k2)(Random.nextGaussian() * initStd + initMean) ++
           Array.fill(numFeatures + 1)(0.0))
-
       case (true, false) =>
         Vectors.dense(Array.fill(numFeatures * k2)(Random.nextGaussian() * initStd + initMean) ++
           Array(0.0))
-
       case (false, true) =>
         Vectors.dense(Array.fill(numFeatures * k2)(Random.nextGaussian() * initStd + initMean) ++
           Array.fill(numFeatures)(0.0))
-
       case (false, false) =>
         Vectors.dense(Array.fill(numFeatures * k2)(Random.nextGaussian() * initStd + initMean))
     }
   }
 
-
-  /**
-    * Create a FMModle from an encoded vector.
-    */
+  // 创建一个因子向量机模型
   private def createModel(weights: Vector): FMModel = {
-
     val values = weights.toArray
-
     val v = new DenseMatrix(k2, numFeatures, values.slice(0, numFeatures * k2))
-
     val w = if (k1) Some(Vectors.dense(values.slice(numFeatures * k2, numFeatures * k2 + numFeatures))) else None
-
     val w0 = if (k0) values.last else 0.0
-
     new FMModel(task, v, w, w0, minLabel, maxLabel)
   }
 
-
-  /**
-    * Run the algorithm with the configured parameters on an input RDD
-    * of LabeledPoint entries.
-    */
+  // 执行训练
   def run(input: RDD[LabeledPoint]): FMModel = {
-
+    // 特征数量
     this.numFeatures = input.first().features.size
     require(numFeatures > 0)
-
+    // 回归任务
     if (task == 0) {
       val (minT, maxT) = input.map(_.label).aggregate[(Double, Double)]((Double.MaxValue, Double.MinValue))({
         case ((min, max), v) =>
@@ -209,32 +193,31 @@ class FMWithSGD(private var task: Int,
         case ((min1, max1), (min2, max2)) =>
           (Math.min(min1, min2), Math.max(max1, max2))
       })
-
       this.minLabel = minT
       this.maxLabel = maxT
     }
-
+    // 新建梯度
     val gradient = new FMGradient(task, k0, k1, k2, numFeatures, minLabel, maxLabel)
-
+    // 新建更新器
     val updater = new FMUpdater(k0, k1, k2, r0, r1, r2, numFeatures)
-
+    // 新建优化器
     val optimizer = new GradientDescent(gradient, updater)
       .setStepSize(stepSize)
       .setNumIterations(numIterations)
       .setMiniBatchFraction(miniBatchFraction)
       .setConvergenceTol(Double.MinPositiveValue)
-
+    // 学习数据分割
     val data = task match {
       case 0 =>
         input.map(l => (l.label, l.features)).persist()
       case 1 =>
         input.map(l => (if (l.label > 0) 1.0 else -1.0, l.features)).persist()
     }
-
+    // 初始化模型权重
     val initWeights = generateInitWeights()
-
+    // 通过优化器学习完成后的参数权重矩阵
     val weights = optimizer.optimize(data, initWeights)
-
+    // 创建学习完成的模型
     createModel(weights)
   }
 }
