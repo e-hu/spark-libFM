@@ -17,13 +17,14 @@ object TestFM extends App {
     val sc = new SparkContext(new SparkConf().setAppName("TESTFM"))
 
     // 读取训练数据
-    val trainData = MLUtils.loadLibSVMFile(sc, "/Users/test/RecommendSytem/dataset/train.csv").cache()
+    val trainData = MLUtils.loadLibSVMFile(sc, "/Users/RecommendSytem/dataset/train.csv").cache()
 
     // 模型参数
     val task              = args(1).toInt     // 任务数量
     val numIterations     = args(2).toInt     // 迭代次数
     val stepSize          = args(3).toDouble  // 学习步子长
     val miniBatchFraction = args(4).toDouble  // batch最小因子
+    
     // 训练执行
     val fmModel = FMWithSGD.train(
       trainData, 
