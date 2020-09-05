@@ -69,40 +69,42 @@ class FMModel(val task: Int,
 }
 
 object FMModel extends Loader[FMModel] {
-
+  // 模型版本
   private object SaveLoadV1_0 {
-
     def thisFormatVersion = "1.0"
-
     def thisClassName = "org.apache.spark.mllib.regression.FMModel"
-
-    /** Model data for model import/export */
+    // 模型数据导入或导出
     case class Data(factorMatrix: Matrix, weightVector: Option[Vector], intercept: Double,
                     min: Double, max: Double, task: Int)
-
+    // 模型保存函数
     def save(sc: SparkContext, path: String, data: Data): Unit = {
       val sqlContext = new SQLContext(sc)
       import sqlContext.implicits._
-      // Create JSON metadata.
+      // 创建模型的JSON元数据
       val metadata = compact(render(
-        ("class" -> this.getClass.getName) ~ ("version" -> thisFormatVersion) ~
-          ("numFeatures" -> data.factorMatrix.numCols) ~ ("numFactors" -> data.factorMatrix.numRows)
-          ~ ("min" -> data.min) ~ ("max" -> data.max) ~ ("task" -> data.task)))
+          ("class" -> this.getClass.getName) ~ 
+          ("version" -> thisFormatVersion) ~
+          ("numFeatures" -> data.factorMatrix.numCols) ~ 
+          ("numFactors" -> data.factorMatrix.numRows) ~ 
+          ("min" -> data.min) ~ 
+          ("max" -> data.max) ~ 
+          ("task" -> data.task)
+      ))
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(metadataPath(path))
-
-      // Create Parquet data.
+      // 创建模型的Parquet数据
       val dataRDD: DataFrame = sc.parallelize(Seq(data), 1).toDF()
       dataRDD.saveAsParquetFile(dataPath(path))
     }
-
+   
+    // 加载模型函数
     def load(sc: SparkContext, path: String): FMModel = {
       val sqlContext = new SQLContext(sc)
-      // Load Parquet data.
+      // 加载Parquet数据
       val dataRDD = sqlContext.parquetFile(dataPath(path))
-      // Check schema explicitly since erasure makes it hard to use match-case for checking.
+      // 检测Schema信息是否正确
       checkSchema[Data](dataRDD.schema)
       val dataArray = dataRDD.select("task", "factorMatrix", "weightVector", "intercept", "min", "max").take(1)
-      assert(dataArray.length == 1, s"Unable to load FMModel data from: ${dataPath(path)}")
+      assert(dataArray.length == 1, s"无法从 ${dataPath(path)} 加载FMModel模型数据")
       val data = dataArray(0)
       val task = data.getInt(0)
       val factorMatrix = data.getAs[Matrix](1)
@@ -113,50 +115,15 @@ object FMModel extends Loader[FMModel] {
       new FMModel(task, factorMatrix, weightVector, intercept, min, max)
     }
   }
-
-  override def load(sc: SparkContext, path: String): FMModel = {
-    implicit val formats = DefaultFormats
-
-    val (loadedClassName, version, metadata) = loadMetadata(sc, path)
-    val classNameV1_0 = SaveLoadV1_0.thisClassName
-
-    (loadedClassName, version) match {
-      case (className, "1.0") if className == classNameV1_0 =>
-        val numFeatures = (metadata \ "numFeatures").extract[Int]
-        val numFactors = (metadata \ "numFactors").extract[Int]
-        val model = SaveLoadV1_0.load(sc, path)
-        assert(model.factorMatrix.numCols == numFeatures,
-          s"FMModel.load expected $numFeatures features," +
-            s" but factorMatrix had columns of size:" +
-            s" ${model.factorMatrix.numCols}")
-        assert(model.factorMatrix.numRows == numFactors,
-          s"FMModel.load expected $numFactors factors," +
-            s" but factorMatrix had rows of size:" +
-            s" ${model.factorMatrix.numRows}")
-        model
-
-      case _ => throw new Exception(
-        s"FMModel.load did not recognize model with (className, format version):" +
-          s"($loadedClassName, $version).  Supported:\n" +
-          s"  ($classNameV1_0, 1.0)")
-    }
-  }
 }
 
-
-/**
-  * :: DeveloperApi ::
-  * Compute gradient and loss for a Least-squared loss function, as used in linear regression.
-  * For the detailed mathematical derivation, see the reference at
-  * http://doi.acm.org/10.1145/2168752.2168771
-  */
+// 因子向量机梯度类
 class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
                  val numFeatures: Int, val min: Double, val max: Double) extends Gradient {
-
+  // 预测函数
   private def predict(data: Vector, weights: Vector): (Double, Array[Double]) = {
-
     var pred = if (k0) weights(weights.size - 1) else 0.0
-
+    // 特征k序列
     if (k1) {
       val pos = numFeatures * k2
       data.foreachActive {
@@ -164,7 +131,6 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
           pred += weights(pos + i) * v
       }
     }
-
     val sum = Array.fill(k2)(0.0)
     for (f <- 0 until k2) {
       var sumSqr = 0.0
@@ -176,26 +142,22 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
       }
       pred += (sum(f) * sum(f) - sumSqr) / 2
     }
-
     if (task == 0) {
       pred = Math.min(Math.max(pred, min), max)
     }
-
     (pred, sum)
   }
-
-
+ 
+  // 计算梯度
   private def cumulateGradient(data: Vector, weights: Vector,
                                pred: Double, label: Double,
                                sum: Array[Double], cumGrad: Vector): Unit = {
-
     val mult = task match {
       case 0 =>
         pred - label
       case 1 =>
         -label * (1.0 - 1.0 / (1.0 + Math.exp(-label * pred)))
     }
-
     cumGrad match {
       case vec: DenseVector =>
         val cumValues = vec.values
@@ -219,20 +181,17 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
               cumValues(pos + f) += (sum(f) * v - weights(pos + f) * v * v) * mult
             }
         }
-
-      case _ =>
-        throw new IllegalArgumentException(
-          s"cumulateGradient only supports adding to a dense vector but got type ${cumGrad.getClass}.")
     }
   }
 
-
+  // 计算样本损失值
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
     val cumGradient = Vectors.dense(Array.fill(weights.size)(0.0))
     val loss = compute(data, label, weights, cumGradient)
     (cumGradient, loss)
   }
-
+ 
+  // 计算梯度值
   override def compute(data: Vector, label: Double, weights: Vector, cumGradient: Vector): Double = {
     require(data.size == numFeatures)
     val (pred, sum) = predict(data, weights)
@@ -247,28 +206,22 @@ class FMGradient(val task: Int, val k0: Boolean, val k1: Boolean, val k2: Int,
   }
 }
 
-/**
-  * :: DeveloperApi ::
-  * Updater for L2 regularized problems.
-  * Uses a step-size decreasing with the square root of the number of iterations.
-  */
+// 因子向量机的更新器（迭代）
 class FMUpdater(val k0: Boolean, val k1: Boolean, val k2: Int,
                 val r0: Double, val r1: Double, val r2: Double,
                 val numFeatures: Int) extends Updater {
-
   override def compute(weightsOld: Vector, gradient: Vector,
                        stepSize: Double, iter: Int, regParam: Double): (Vector, Double) = {
     val thisIterStepSize = stepSize / math.sqrt(iter)
     val len = weightsOld.size
-
     val weightsNew = Array.fill(len)(0.0)
     var regVal = 0.0
-
+   
     if (k0) {
       weightsNew(len - 1) = weightsOld(len - 1) - thisIterStepSize * (gradient(len - 1) + r0 * weightsOld(len - 1))
       regVal += r0 * weightsNew(len - 1) * weightsNew(len - 1)
     }
-
+    
     if (k1) {
       for (i <- numFeatures * k2 until numFeatures * k2 + numFeatures) {
         weightsNew(i) = weightsOld(i) - thisIterStepSize * (gradient(i) + r1 * weightsOld(i))
