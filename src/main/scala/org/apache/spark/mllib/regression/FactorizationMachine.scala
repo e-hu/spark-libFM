@@ -28,16 +28,14 @@ class FMModel(val task: Int,
               val intercept: Double,
               val min: Double,
               val max: Double) extends Serializable with Saveable {
-
+  // 特征数量与样本数量
   val numFeatures = factorMatrix.numCols
   val numFactors = factorMatrix.numRows
-
   require(numFeatures > 0 && numFactors > 0)
   require(task == 0 || task == 1)
-
+  // 使用测试数据进行模型预测
   def predict(testData: Vector): Double = {
     require(testData.size == numFeatures)
-
     var pred = intercept
     if (weightVector.isDefined) {
       testData.foreachActive {
@@ -45,7 +43,6 @@ class FMModel(val task: Int,
           pred += weightVector.get(i) * v
       }
     }
-
     for (f <- 0 until numFactors) {
       var sum = 0.0
       var sumSqr = 0.0
@@ -57,7 +54,6 @@ class FMModel(val task: Int,
       }
       pred += (sum * sum - sumSqr) / 2
     }
-
     task match {
       case 0 =>
         Math.min(Math.max(pred, min), max)
@@ -65,18 +61,7 @@ class FMModel(val task: Int,
         1.0 / (1.0 + Math.exp(-pred))
     }
   }
-
-  def predict(testData: RDD[Vector]): RDD[Double] = {
-    testData.mapPartitions {
-      _.map {
-        vec =>
-          predict(vec)
-      }
-    }
-  }
-
-  override protected def formatVersion: String = "1.0"
-
+  // 模型保存
   override def save(sc: SparkContext, path: String): Unit = {
     val data = FMModel.SaveLoadV1_0.Data(factorMatrix, weightVector, intercept, min, max, task)
     FMModel.SaveLoadV1_0.save(sc, path, data)
